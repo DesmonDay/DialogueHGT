@@ -133,7 +133,7 @@ def attentive_node_features(emotions, seq_lengths, umask, matchatt_layer, no_cud
     start = torch.cumsum(torch.cat((start_zero, input_conversation_length[:-1])), 0)
 
     emotions = torch.stack([pad(emotions.narrow(0, s, l), max_len, no_cuda)
-                                for s, l in zip(start.data.tolist(),
+                                 for s, l in zip(start.data.tolist(),
                                                 input_conversation_length.data.tolist())], 0).transpose(0, 1) # ???
 
     alpha, alpha_f, alpha_b = [], [], []
@@ -148,8 +148,8 @@ def attentive_node_features(emotions, seq_lengths, umask, matchatt_layer, no_cud
     return att_emotions
 
 
-def classify_node_features(emotions, seq_lengths, umask, matchatt_layer, linear_layer, dropout_layer, smax_fc_layer,
-                           nodal_attn, avec, no_cuda):
+def classify_node_features(emotions, seq_lengths, umask, matchatt_layer, linear_layer, dropout_layer, 
+                           smax_fc_layer, nodal_attn, avec, no_cuda):
     """
     Function for the final classification, as in Equation 7, 8, 9. in the paper.
     """
