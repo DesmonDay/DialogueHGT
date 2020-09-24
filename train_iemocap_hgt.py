@@ -205,6 +205,11 @@ if __name__ == "__main__":
     if cuda:
         model.cuda()
 
+    total_params = sum(p.numel() for p in model.parameters())
+    log.info('Total parameters: %d' % total_params)
+    total_trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    log.info('Training parameters: %d' % total_trainable_params) 
+
     loss_weights = torch.FloatTensor(
         [1 / 0.086747, 1 / 0.144406, 1 / 0.227883, 1 / 0.160585, 1 / 0.127711, 1 / 0.252668])
 
