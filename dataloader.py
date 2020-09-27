@@ -43,10 +43,10 @@ class MELDDataset(Dataset):
     """
     MELD Dataset.
     """
-    def __init__(self, path, classify, train=True):
+    def __init__(self, classify, train=True):
         self.videoIDs, self.videoSpeakers, self.videoLabelsEmotion, self.videoText, \
         self.videoAudio, self.videoSentence, self.trainVid, \
-        self.testVid, self.videoLabelsSentiment = pickle.load(open(path, 'rb'))
+        self.testVid, self.videoLabelsSentiment = pickle.load(open('./dataset/MELD_features.pkl', 'rb'))
 
         if classify == 'emotion':
             self.videoLabels = self.videoLabelsEmotion

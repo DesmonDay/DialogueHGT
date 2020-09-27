@@ -233,43 +233,43 @@ class DialogueHGTModel(nn.Module):
     """
     Implementation of DialogueHGT Model.
     """
-    def __init__(self, base_model, D_m, D_g, D_p, D_e, D_h, D_a,
-                 graph_hidden_size, n_speakers, max_seq_len,
-                 window_past, window_future, n_classes=7,
-                 listener_state=False, context_attention='simple',
-                 dropout_rec=0.5, dropout=0.5, nodal_attention=True,
-                 avec=False, no_cuda=False):
+
+    def __init__(self, args, D_m, D_g, D_p, D_e, D_a,
+                 graph_hidden_size, n_speakers, n_classes=7,
+                 dropout_rec=0.5, avec=False):
 
         super(DialogueHGTModel, self).__init__()
-        self.base_model = base_model
+        self.base_model = args.base_model
         self.avec = avec
-        self.no_cuda = no_cuda
+        self.no_cuda = args.no_cuda
 
         # Sequential Encoder
         if self.base_model == 'DialogRNN':
-            self.dialog_rnn_f = DialogueRNN(D_m, D_g, D_p, D_e, listener_state, context_attention, D_a, dropout_rec)
-            self.dialog_rnn_r = DialogueRNN(D_m, D_g, D_p, D_e, listener_state, context_attention, D_a, dropout_rec)
+            self.dialog_rnn_f = DialogueRNN(D_m, D_g, D_p, D_e, args.active_listener, args.attention, D_a, dropout_rec)
+            self.dialog_rnn_r = DialogueRNN(D_m, D_g, D_p, D_e, args.active_listener, args.attention, D_a, dropout_rec)
         elif self.base_model == 'LSTM':
-            self.lstm = nn.LSTM(input_size=D_m, hidden_size=D_e, num_layers=2, bidirectional=True, dropout=dropout)
+            self.lstm = nn.LSTM(input_size=D_m, hidden_size=D_e, num_layers=2, bidirectional=True, dropout=args.dropout)
         elif self.base_model == 'GRU':
-            self.gru = nn.GRU(input_size=D_m, hidden_size=D_e, num_layers=2, bidirectional=True, dropout=dropout)
+            self.gru = nn.GRU(input_size=D_m, hidden_size=D_e, num_layers=2, bidirectional=True, dropout=args.dropout)
         elif self.base_model == 'None':
             self.base_linear = nn.Linear(D_m, 2 * D_e)
         else:
             log.error('Base model must be one of DialogRNN/LSTM/GRU')
             raise NotImplementedError
 
-        self.nodal_attention = nodal_attention
-        self.window_past = window_past
-        self.window_future = window_future
+        self.nodal_attention = args.nodal_attention
+        self.window_past = args.windowp
+        self.window_future = args.windowf
+        self.num_gnn_layers = args.num_layers
+        self.num_heads = args.num_heads
 
         # 暂不添加其他 attention 结构，只将图结构经过 HGT模型
         # Graph Encoder
         self.graphnet = HGTNet(2 * D_e, graph_hidden_size, n_speakers, num_relations=2,
-                               n_heads=4, n_layers=2, dropout=0.2)
+                               n_heads=self.num_heads, n_layers=self.num_gnn_layers, dropout=0.2)
         self.matchatt = MatchingAttention(2 * D_e + graph_hidden_size, 2 * D_e + graph_hidden_size, att_type='general2')
         self.linear = nn.Linear(2 * D_e + graph_hidden_size, graph_hidden_size)
-        self.dropout = nn.Dropout(dropout)
+        self.dropout = nn.Dropout(args.dropout)
         self.softmax_fc = nn.Linear(graph_hidden_size, n_classes)
 
     def _reverse_seq(self, X, mask):  ## 这个函数需要理解，主要是用于 DialogueRNN 当中

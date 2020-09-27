@@ -1,21 +1,23 @@
 import time
-import argparse
 import ipdb
+import argparse
 import numpy as np
+import pandas as pd
 
 import torch
 import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import DataLoader
 from torch.utils.data.sampler import SubsetRandomSampler
-from sklearn.metrics import f1_score, accuracy_score
-from sklearn.metrics import classification_report, precision_recall_fscore_support
+from sklearn.metrics import mean_absolute_error
+from scipy.stats import pearsonr
 
 from logger import log
 from model import DialogueHGTModel
-from dataloader import IEMOCAPDataset
-from loss import MaskedNLLLoss
+from dataloader import AVECDataset
 from utils import seed_everything
+
+# TODO: If we add word-level graph, we need to add `masks`.
 
 
 def get_train_valid_sampler(trainset, valid=0.1):
@@ -25,17 +27,15 @@ def get_train_valid_sampler(trainset, valid=0.1):
     return SubsetRandomSampler(idx[split:]), SubsetRandomSampler(idx[:split])  # 随机采样
 
 
-def get_IEMOCAP_loaders(batch_size=32, valid=0.1, num_workers=0, pin_memory=False):
-    trainset = IEMOCAPDataset(train=True)
+def get_AVEC_loaders(path, batch_size=32, valid=0.1, num_workers=0, pin_memory=False):
+    trainset = AVECDataset(path=path, train=True)
     train_sampler, valid_sampler = get_train_valid_sampler(trainset, valid)
-
     train_loader = DataLoader(trainset,
                               batch_size=batch_size,
                               sampler=train_sampler,
                               collate_fn=trainset.collate_fn,
                               num_workers=num_workers,
                               pin_memory=pin_memory)
-
     valid_loader = DataLoader(trainset,
                               batch_size=batch_size,
                               sampler=valid_sampler,
@@ -43,7 +43,7 @@ def get_IEMOCAP_loaders(batch_size=32, valid=0.1, num_workers=0, pin_memory=Fals
                               num_workers=num_workers,
                               pin_memory=pin_memory)
 
-    testset = IEMOCAPDataset(train=False)
+    testset = AVECDataset(path=path, train=False)
     test_loader = DataLoader(testset,
                              batch_size=batch_size,
                              collate_fn=testset.collate_fn,
@@ -54,55 +54,48 @@ def get_IEMOCAP_loaders(batch_size=32, valid=0.1, num_workers=0, pin_memory=Fals
 
 
 def train_or_eval_graph_model(model, loss_func, dataloader, cuda, optimizer=None, train=False):
-    losses, preds, labels = [], [], []
-    scores, vids = [], []
+    losses, preds, labels, masks = [], [], [], []
+    assert not train or optimizer != None
 
-    assert not train or optimizer is not None
     if train:
         model.train()
     else:
         model.eval()
 
-    seed_everything(args.seed)
     for data in dataloader:
         if train:
             optimizer.zero_grad()
-        # Text feature, Visual feature, Audio feature, Speaker mask, Utterance mask, Label
-        textf, visualf, audiof, qmask, umask, label = [d.cuda() for d in data[:-1]] if cuda else data[:-1]
+        textf, visualf, audiof, qmask, umask, label = [d.cuda() for d in data] if cuda else data
         lengths = [(umask[j] == 1).nonzero().tolist()[-1][0] + 1 for j in
                    range(len(umask))]  # 每个 batch 中真实的 utterance 数量
+        # TODO: 如果增加词级别 level，可以增加一个新的 lengths，表示添加词的 features 之后lengths的长度
 
         # 只用到了 text feature, need to change.
-        
-        # ipdb.set_trace()
-        log_prob = model(textf, qmask, umask, lengths)
-        label = torch.cat([label[j][:lengths[j]] for j in range(len(label))])
-        loss = loss_func(log_prob, label)
+        # ipdb.set_trace()  
+        pred = model(textf, qmask, umask, lengths) # True number of utterances
+        pred = pred.squeeze()
+        labels_ = torch.cat([label[j][:lengths[j]] for j in range(len(label))])
+        loss = loss_func(pred, labels_)
 
-        preds.append(torch.argmax(log_prob, 1).cpu().numpy())
-        labels.append(label.cpu().numpy())
+        preds.append(pred.data.cpu().numpy())
+        labels.append(labels_.data.cpu().numpy())
         losses.append(loss.item())
 
         if train:
             loss.backward()
             optimizer.step()
-        else:
-            vids += data[-1]
 
+    # ipdb.set_trace()
     if preds != []:
         preds = np.concatenate(preds)
         labels = np.concatenate(labels)
     else:
-        return float('nan'), float('nan'), [], [], float('nan'), []
-
-    labels = np.array(labels)
-    preds = np.array(preds)
-    vids = np.array(vids)
-
+        return float('nan'), float('nan'), float('nan'), [], []
     avg_loss = round(np.sum(losses) / len(losses), 4)
-    avg_accuracy = round(accuracy_score(labels, preds) * 100, 2)
-    avg_fscore = round(f1_score(labels, preds, average='weighted') * 100, 2)
-    return avg_loss, avg_accuracy, labels, preds, avg_fscore, vids
+    mae = round(mean_absolute_error(labels, preds), 4)
+    pred_lab = pd.DataFrame(list(zip(labels, preds)))
+    pear = round(pearsonr(pred_lab[0], pred_lab[1])[0], 4)
+    return avg_loss, mae, pear, labels, preds
 
 
 if __name__ == "__main__":
@@ -141,10 +134,11 @@ if __name__ == "__main__":
     parser.add_argument('--num_heads', type=int, default=4, help='number of heads in DialogueHGT')
     parser.add_argument('--tensorboard', action='store_true', default=False,
                         help='Enables tensorboard log')
+    parser.add_argument('--attribute', type=int, default=1, help='AVEC attribute for regression')
 
     args = parser.parse_args()
     log.info(args)
-    
+
     args.cuda = torch.cuda.is_available() and not args.no_cuda
     if args.cuda:
         log.info("Running on GPU")
@@ -154,10 +148,11 @@ if __name__ == "__main__":
     # I can use VisualDL instead.
     if args.tensorboard:
         from tensorboardX import SummaryWriter
+
         writer = SummaryWriter()
 
-    # 针对 IEMOCAP 数据集特定不变的部分
-    n_classes = 6  # 6个情感分类，针对 IEMOCAP
+    # 针对 AVEC 数据集特定部分
+    n_classes = 1  # 回归问题
     cuda = args.cuda
     n_epochs = args.epochs
     batch_size = args.batch_size
@@ -166,7 +161,6 @@ if __name__ == "__main__":
     D_g = 150
     D_p = 150
     D_e = 100
-    D_h = 100
     D_a = 100
     graph_h = 100
 
@@ -174,7 +168,8 @@ if __name__ == "__main__":
     model = DialogueHGTModel(args,
                              D_m, D_g, D_p, D_e, D_a, graph_h,
                              n_speakers=2,
-                             n_classes=n_classes)
+                             n_classes=n_classes,
+                             avec=True)
     log.info("Graph NN with %s as base model" % args.base_model)
     name = 'Graph'
 
@@ -184,47 +179,37 @@ if __name__ == "__main__":
     total_params = sum(p.numel() for p in model.parameters())
     log.info('Total parameters: %d' % total_params)
     total_trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
-    log.info('Training parameters: %d' % total_trainable_params) 
+    log.info('Training parameters: %d' % total_trainable_params)
 
-    loss_weights = torch.FloatTensor(
-        [1 / 0.086747, 1 / 0.144406, 1 / 0.227883, 1 / 0.160585, 1 / 0.127711, 1 / 0.252668])
-
-    if args.class_weight:
-        loss_function = nn.NLLLoss(loss_weights.cuda() if cuda else loss_weights)
-            # 用于多分类的负对数似然损失函数(negative log likelihood loss)
-            # weight权重是一个一维张量，为每个类分配权重；当训练集不平衡时，这是特别有用的。
-    else:
-        loss_function = nn.NLLLoss()
-
+    # 不需要 class weights, 因为这是回归任务
+    loss_function = nn.MSELoss()
     optimizer = optim.Adam(model.parameters(), lr=args.lr, weight_decay=args.l2)
-    train_loader, valid_loader, test_loader = get_IEMOCAP_loaders(valid=0.0,
-                                                                  batch_size=batch_size,
-                                                                  num_workers=0)
-    best_fscore, best_loss, best_label, best_pred, best_mask = None, None, None, None, None
-    all_fscore, all_acc, all_loss = [], [], []
+    train_loader, valid_loader, test_loader = \
+        get_AVEC_loaders('./dataset/AVEC_features/AVEC_features_{}.pkl'.format(args.attribute),
+                         valid=0.0,
+                         batch_size=batch_size,
+                         num_workers=2)
+    best_loss, best_label, best_pred, best_pear = None, None, None, None
 
     for e in range(n_epochs):
         start_time = time.time()
-        train_loss, train_acc, _, _, train_fscore, _ = \
-            train_or_eval_graph_model(model, loss_function, train_loader, cuda, optimizer, True)
-        valid_loss, valid_acc, _, _, valid_fscore, _, = \
-            train_or_eval_graph_model(model, loss_function, valid_loader, cuda)
-        test_loss, test_acc, test_label, test_pred, test_fscore, _ = \
-            train_or_eval_graph_model(model, loss_function, test_loader, cuda)
-        all_fscore.append(test_fscore)
+        train_loss, train_mae, train_pear, _, _ = train_or_eval_graph_model(model, loss_function, train_loader, cuda,
+                                                                            optimizer, True)
+        valid_loss, valid_mae, valid_pear, _, _ = train_or_eval_graph_model(model, loss_function, valid_loader, cuda)
+        test_loss, test_mae, test_pear, test_label, test_pred = train_or_eval_graph_model(model, loss_function,
+                                                                                          test_loader, cuda)
+        if best_loss == None or best_loss > test_loss:
+            best_loss, best_label, best_pred, best_pear = \
+                test_loss, test_label, test_pred, test_pear
 
-        if args.tensorboard:
-            writer.add_scalar('test: accuracy/loss', test_acc / test_loss, e)
-            writer.add_scalar('train: accuracy/loss', train_acc / train_loss, e)
-
-        log.info(
-            'epoch: {}, train_loss: {}, train_acc: {}, train_fscore: {}, valid_loss: {}, valid_acc: {}, \
-            valid_fscore: {}, test_loss: {}, test_acc: {}, test_fscore: {}, time: {}s'. \
-                format(e + 1, train_loss, train_acc, train_fscore, valid_loss, valid_acc, valid_fscore, test_loss,
-                       test_acc, test_fscore, round(time.time() - start_time, 2)))
-
-    if args.tensorboard:
-        writer.close()
+        log.info('epoch: {}, train_loss: {}, train_mae: {}, train_pear: {}, valid_loss: {}, valid mae: {}, '
+                 'valid_pear: {}, test_loss: {}, test_mae: {}, test_pear: {}, time: {}'.
+                 format(e, train_loss, train_mae, train_pear, valid_loss, valid_mae,
+                        valid_pear, test_loss, test_mae, test_pear, round(time.time() - start_time, 2)))
 
     log.info('Test performance...')
-    log.info('F-Score: %f' % max(all_fscore))
+    log.info('MSE: {}, MAE: {}, r: {}'.format(best_loss,
+                                              round(mean_absolute_error(best_label, best_pred), 4),
+                                              best_pear))
+
+
