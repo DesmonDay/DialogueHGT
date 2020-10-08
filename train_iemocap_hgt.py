@@ -222,6 +222,7 @@ if __name__ == "__main__":
             valid_fscore: {}, test_loss: {}, test_acc: {}, test_fscore: {}, time: {}s'. \
                 format(e + 1, train_loss, train_acc, train_fscore, valid_loss, valid_acc, valid_fscore, test_loss,
                        test_acc, test_fscore, round(time.time() - start_time, 2)))
+        log.info(classification_report(test_label, test_pred, digits=4)) # 用于记录分类具体结果
 
     if args.tensorboard:
         writer.close()
