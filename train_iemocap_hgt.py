@@ -8,7 +8,7 @@ import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import DataLoader
 from torch.utils.data.sampler import SubsetRandomSampler
-from sklearn.metrics import f1_score, accuracy_score
+from sklearn.metrics import f1_score, accuracy_score, confusion_matrix
 from sklearn.metrics import classification_report, precision_recall_fscore_support
 
 from logger import log
@@ -223,6 +223,7 @@ if __name__ == "__main__":
                 format(e + 1, train_loss, train_acc, train_fscore, valid_loss, valid_acc, valid_fscore, test_loss,
                        test_acc, test_fscore, round(time.time() - start_time, 2)))
         log.info(classification_report(test_label, test_pred, digits=4)) # 用于记录分类具体结果
+        log.info(confusion_matrix(test_label, test_pred))
 
     if args.tensorboard:
         writer.close()

@@ -13,7 +13,7 @@ from sklearn.metrics import mean_absolute_error
 from scipy.stats import pearsonr
 
 from logger import log
-from model import DialogueHGTModel
+from model2 import DialogueHGTModel
 from dataloader import AVECDataset
 from utils import seed_everything
 
@@ -54,7 +54,7 @@ def get_AVEC_loaders(path, batch_size=32, valid=0.1, num_workers=0, pin_memory=F
 
 
 def train_or_eval_graph_model(model, loss_func, dataloader, cuda, optimizer=None, train=False):
-    losses, preds, labels, masks = [], [], [], []
+    losses, preds, labels = [], [], []
     assert not train or optimizer != None
 
     if train:
@@ -62,6 +62,7 @@ def train_or_eval_graph_model(model, loss_func, dataloader, cuda, optimizer=None
     else:
         model.eval()
 
+    seed_everything(args.seed)
     for data in dataloader:
         if train:
             optimizer.zero_grad()
@@ -135,6 +136,7 @@ if __name__ == "__main__":
     parser.add_argument('--tensorboard', action='store_true', default=False,
                         help='Enables tensorboard log')
     parser.add_argument('--attribute', type=int, default=1, help='AVEC attribute for regression')
+    parser.add_argument('--mode', type=int, default=0, help='different mode of feature')
 
     args = parser.parse_args()
     log.info(args)
@@ -158,11 +160,11 @@ if __name__ == "__main__":
     batch_size = args.batch_size
 
     D_m = 100  # utterance feature size
-    D_g = 150
-    D_p = 150
-    D_e = 100
+    D_g = 128
+    D_p = 100
+    D_e = 128
     D_a = 100
-    graph_h = 100
+    graph_h = 128
 
     seed_everything(args.seed)
     model = DialogueHGTModel(args,
