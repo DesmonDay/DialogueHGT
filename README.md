@@ -1,4 +1,6 @@
-# DialogueHGT++
+# DialogueHGT
+
+Using heterogeneous graph transformer to replace RGCN in DialogueGCN.
 
 To reproduce the IEMOCAP dataset results, run:
 ```
